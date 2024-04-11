@@ -15,24 +15,17 @@ import {
   FormMessage
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import { SignUp } from '@/app/actions/auth.actions';
+import { SignIn, SignUp } from '@/app/actions/auth.actions';
 import { useRouter } from 'next/navigation'
+import { SignInSchema } from '@/app/types';
 
-const formSchema = z.object({
-  username: z.string().min(2).max(50),
-  password: z.string().min(4, { message: 'Password must be at least 8 characters long' }).max(50),
-  confirmPassword: z.string()
-}).refine((data) => data.confirmPassword === data.password,
-  { message: 'Passwords do not match', path: ['confirmPassword'] }
-)
-
-const SignUpForm = () => {
+const SignInForm = () => {
 
   const router = useRouter();
 
   // 1. Define your form.
-  const form = useForm<z.infer<typeof formSchema>>({
-    resolver: zodResolver(formSchema),
+  const form = useForm<z.infer<typeof SignInSchema>>({
+    resolver: zodResolver(SignInSchema),
     defaultValues: {
       username: '',
       password: ''
@@ -40,11 +33,10 @@ const SignUpForm = () => {
   })
 
   // 2. Define a submit handler.
-  async function onSubmit (values: z.infer<typeof formSchema>) {
+  async function onSubmit (values: z.infer<typeof SignInSchema>) {
     // Do something with the form values.
     // ✅ This will be type-safe and validated.
-    console.log(values)
-    const res = await SignUp(values)
+    const res = await SignIn(values)
     if (res?.error) {
       toast({
         title: 'Error',
@@ -55,7 +47,7 @@ const SignUpForm = () => {
     } else if (res?.success) {
       toast({
         variant: 'default',
-        description: 'Account created successfully'
+        description: 'Logged In Successfully'
       })
 
       router.push('/')
@@ -91,23 +83,10 @@ const SignUpForm = () => {
             </FormItem>
           )}
         />
-        <FormField
-          control={form.control}
-          name="confirmPassword"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Confirm Password</FormLabel>
-              <FormControl>
-                <Input placeholder="*****" type="password" {...field} />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
         <Button type="submit">Submit</Button>
       </form>
     </Form>
   )
 };
 
-export default SignUpForm;
+export default SignInForm;

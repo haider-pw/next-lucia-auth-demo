@@ -1,8 +1,22 @@
 import React from 'react';
+import { validateRequest } from '@/auth';
+import { redirect } from 'next/navigation';
 
-function Member (props) {
+async function Member () {
+  const { user, session } = await validateRequest();
+
+  if (!user) {
+    return redirect('/SignIn');
+  }
+
   return (
-    <div>Member</div>
+    <div>
+
+      Member: {JSON.stringify(user)}
+      <br />
+      Session: {JSON.stringify(session)}
+
+    </div>
   );
 }
 

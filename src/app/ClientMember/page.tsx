@@ -1,9 +1,9 @@
 import React from 'react';
 
-function ClientMember (props) {
+function Page (props) {
   return (
     <div>ClientMember</div>
   );
 }
 
-export default ClientMember;
+export default Page;
