@@ -5,11 +5,15 @@ import { SignInSchema, SignUpSchema } from '../types'
 import { Argon2id } from 'oslo/password';
 import { generateId } from 'lucia';
 import db from '@/lib/db/index';
-import { userTable } from '@/lib/db/schema';
+import { emailVerificationTable, userTable } from '@/lib/db/schema';
 import { lucia, validateRequest } from '@/auth';
 import { cookies } from 'next/headers';
 import { eq } from 'drizzle-orm';
 import * as argon2 from 'argon2'
+import { generateCodeVerifier, generateState } from 'arctic';
+import { google } from '@/lib/lucia/oauth';
+import jwt from 'jsonwebtoken';
+import { sendEmail } from '@/lib/email';
 
 export const SignUp = async (values: z.infer<typeof SignUpSchema>) => {
 
@@ -19,20 +23,44 @@ export const SignUp = async (values: z.infer<typeof SignUpSchema>) => {
   try {
     await db.insert(userTable).values({
       id: userId,
-      username: values.username,
+      name: values.name,
+      email: values.email,
       hashedPassword
     }).returning({
       id: userTable.id,
-      username: userTable.username
+      name: userTable.name
     })
 
-    const session = await lucia.createSession(userId, {
-      expiration: 60 * 60 * 24 * 30
+    // generate a random string 6 characters long
+    const code = Math.random().toString(36).substring(2, 8);
+
+    await db.insert(emailVerificationTable).values({
+      code,
+      userId,
+      id: generateId(15),
+      sentAt: new Date()
+    });
+
+    const token = jwt.sign({
+      email: values.email,
+      userId,
+      code
+    }, process.env.JWT_SECRET!, {
+      expiresIn: '2m'
     })
 
-    const sessionCookie = lucia.createSessionCookie(session.id)
+    const url = `${process.env.NEXT_PUBLIC_BASE_URL}/api/verify-email?token=${token}`;
 
-    cookies().set(sessionCookie.name, sessionCookie.value, sessionCookie.attributes)
+
+    // Send email with the url to the user
+    await sendEmail({
+      to: values.email,
+      subject: 'Email Verification',
+      html: `Click the link to verify your email: <a href="${url}"> ${url}</a>`
+    })
+
+    console.log('url', url);
+
 
     return {
       success: true,
@@ -41,13 +69,13 @@ export const SignUp = async (values: z.infer<typeof SignUpSchema>) => {
       }
     }
 
-  } catch (error: any) {
+  } catch
+    (error: any) {
     console.error('error:', error);
     return {
       error: error?.message
     }
   }
-
 }
 
 export const SignIn = async (values: z.infer<typeof SignInSchema>) => {
@@ -62,7 +90,7 @@ export const SignIn = async (values: z.infer<typeof SignInSchema>) => {
 
 
   const existingUser = await db.query.userTable.findFirst({
-    where: (table: any) => eq(table.username, values.username)
+    where: (table: any) => eq(table.email, values.email)
   })
 
   if (!existingUser || !existingUser.hashedPassword) {
@@ -79,6 +107,13 @@ export const SignIn = async (values: z.infer<typeof SignInSchema>) => {
   if (!isValidPassword) {
     return {
       error: 'Incorrect username or password'
+    }
+  }
+
+  if (existingUser.isEmailVerified === false) {
+    return {
+      error: 'Email not verified',
+      key: 'email_not_verified'
     }
   }
 
@@ -118,6 +153,114 @@ export const SignOut = async () => {
     console.error('error:', err);
     return {
       error: err?.message
+    }
+  }
+}
+
+export const resendVerificationEmail = async (email: string) => {
+  try {
+    const existingUser = await db.query.userTable.findFirst({
+      where: (table: any) => eq(table.email, email)
+    })
+
+    if (!existingUser) {
+      return {
+        error: 'User not found'
+      }
+    }
+
+    if (existingUser.isEmailVerified === true) {
+      return {
+        error: 'Email already verified'
+      }
+    }
+
+    const existedCode = await db.query.emailVerificationTable.findFirst({
+      where: (table: any) => eq(emailVerificationTable.userId, existingUser.id)
+    })
+
+    if (!existedCode) {
+      return {
+        error: 'Code not found'
+      }
+    }
+
+    const sentAt = new Date(existedCode.sentAt)
+    const isOneMinuteHasPassed = new Date().getTime() - sentAt.getTime() > 60000; // 1 Minute
+
+    if (!isOneMinuteHasPassed) {
+      return {
+        error: `Email already sent, you can send email in 
+        ${Math.ceil((60000 - (new Date().getTime() - sentAt.getTime())) / 1000)} seconds`
+      }
+    }
+
+    const code = Math.random().toString(36).substring(2, 8);
+
+    await db.update(emailVerificationTable).set({
+      code,
+      sentAt: new Date()
+    }).where(eq(emailVerificationTable.userId, existingUser.id));
+
+    const token = jwt.sign({
+      email,
+      userId: existingUser.id,
+      code
+    }, process.env.JWT_SECRET!, {
+      expiresIn: '2m'
+    })
+
+    const url = `${process.env.NEXT_PUBLIC_BASE_URL}/api/verify-email?token=${token}`;
+
+    // Send email with the url to the user
+
+    await sendEmail({
+      to: email,
+      subject: 'Email Verification',
+      html: `Click the link to verify your email: <a href="${url}"> ${url}</a>`
+    })
+
+    console.log('url', url);
+
+    return {
+      success: true,
+      message: 'Email sent'
+    }
+  } catch (error: any) {
+    console.error('error:', error);
+    return {
+      error: error?.message
+    }
+  }
+}
+
+export const createGoogleAuthorizationURL = async () => {
+  try {
+    const state = generateState();
+    const codeVerifier = generateCodeVerifier();
+
+    cookies().set('codeVerifier', codeVerifier, {
+      httpOnly: true,
+      // secure: process.env.NODE_ENV === 'production'
+      // sameSite: 'strict'
+    })
+
+    cookies().set("state", state, {
+      httpOnly: true,
+    })
+
+    const authorizationURL = await google.createAuthorizationURL(state, codeVerifier, {
+      scopes: ['email', 'profile']
+    });
+
+    return {
+      success: true,
+      data: authorizationURL
+    }
+  } catch (error: any) {
+    console.error('error:', error);
+    return {
+      error: error?.message
     }
   }
 }
